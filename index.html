@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Реклама: 3D AR Эффект</title>
+    <!-- Загрузка Tailwind CSS для стилизации -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Установка шрифта Inter -->
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-900 overflow-hidden h-screen w-screen flex items-center justify-center">
+
+    <!-- Главный контейнер для AR-эффекта -->
+    <div id="ar-container" class="relative h-screen w-screen overflow-hidden">
+
+        <!-- 1. Видеопоток с Камеры (Задний план) -->
+        <!-- 'playsinline' обязателен для iOS, чтобы видео воспроизводилось без перехода в полноэкранный режим -->
+        <video id="cameraFeed" playsinline autoplay muted class="absolute inset-0 w-full h-full object-cover hidden"></video>
+
+        <!-- 2. Рекламное Видео (Передний план / AR-Объект) -->
+        <!-- Класс 'hidden' уберется при старте -->
+        <video id="adVideo" playsinline loop muted
+               class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
+                      max-h-full max-w-full z-20 shadow-2xl rounded-xl border-4 border-white
+                      object-contain"
+               style="aspect-ratio: 9/16; width: 80vh; max-width: 90vw;"
+               src="https://github.com/Suno2035/hitbox/blob/main/video5199451279272741823.mp4?raw=true"></video>
+               
+        <!-- 3. Индикатор Загрузки -->
+        <div id="loadingIndicator" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/90 z-40">
+            <svg class="animate-spin -ml-1 mr-3 h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-4 text-white text-lg font-semibold">Загрузка медиа...</p>
+        </div>
+
+        <!-- 4. Стартовый Экран / Кнопка (Требуется для разрешений браузера) -->
+        <div id="startOverlay" class="absolute inset-0 bg-gray-900/95 flex flex-col items-center justify-center z-50 rounded-xl">
+            <h1 class="text-3xl text-white font-extrabold mb-6 text-center px-4">Сканируй Билборд!</h1>
+            <p class="text-gray-300 mb-8 text-center px-4">Нажмите, чтобы запустить камеру и увидеть 3D-рекламу.</p>
+            <button id="startButton" class="px-10 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition duration-300 transform hover:scale-105">
+                СТАРТ
+            </button>
+        </div>
+        
+        <!-- 5. Контейнер для ошибок (скрыт) -->
+        <div id="errorContainer" class="hidden absolute inset-0 bg-red-900/90 flex flex-col items-center justify-center z-50">
+            <p class="text-white text-xl font-bold mb-4">Ошибка!</p>
+            <p id="errorMessage" class="text-red-200 text-center px-6"></p>
+        </div>
+    </div>
+
+    <script>
+        const cameraFeed = document.getElementById('cameraFeed');
+        const adVideo = document.getElementById('adVideo');
+        const startButton = document.getElementById('startButton');
+        const startOverlay = document.getElementById('startOverlay');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorContainer = document.getElementById('errorContainer');
+        const errorMessage = document.getElementById('errorMessage');
+
+        const showError = (message) => {
+            loadingIndicator.classList.add('hidden');
+            startOverlay.classList.add('hidden');
+            errorContainer.classList.remove('hidden');
+            errorMessage.textContent = message;
+            console.error(message);
+        };
+
+        const startAR = async () => {
+            loadingIndicator.classList.remove('hidden');
+            startOverlay.classList.add('hidden');
+            
+            let stream = null;
+            
+            // 1. Попытка получить доступ к камере
+            try {
+                // 1a. Попытка с конкретной задней камерой (environment) для AR
+                const rearCameraConstraints = {
+                    video: { facingMode: "environment" },
+                    audio: false // Включено, как в предыдущей версии
+                };
+                stream = await navigator.mediaDevices.getUserMedia(rearCameraConstraints);
+                console.log("Запущена задняя камера (environment).");
+
+            } catch (err1) {
+                console.warn(`Не удалось запустить заднюю камеру: ${err1.name}. Попытка с любой камерой.`);
+                
+                try {
+                    // 1b. Попытка с любой доступной камерой (общий запрос)
+                    const anyCameraConstraints = { 
+                        video: true, 
+                        audio: false // Включено, как в предыдущей версии
+                    };
+                    stream = await navigator.mediaDevices.getUserMedia(anyCameraConstraints);
+                    console.log("Запущена любая доступная камера (video: true).");
+
+                } catch (err2) {
+                    // 1c. Финальный сбой
+                    if (err2.name === 'NotAllowedError' || err2.name === 'PermissionDeniedError') {
+                        showError("Доступ к камере заблокирован. Пожалуйста, разрешите использование камеры в настройках браузера.");
+                    } else if (err2.name === 'NotFoundError' || err2.name === 'DevicesNotFoundError') {
+                        showError("Камера не найдена на вашем устройстве.");
+                    } else {
+                        // Перехватываем исходную ошибку "Could not start video source"
+                        showError(`Произошла непредвиденная ошибка при запуске камеры: ${err2.message}.`);
+                    }
+                    loadingIndicator.classList.add('hidden');
+                    return; // Прекращаем выполнение, если камера не запустилась
+                }
+            }
+
+            // 2. Если поток получен, устанавливаем его и запускаем видео
+            try {
+                if (stream) {
+                    cameraFeed.srcObject = stream;
+                    cameraFeed.classList.remove('hidden');
+                    
+                    // Ожидание загрузки метаданных видеопотока камеры
+                    await new Promise(resolve => cameraFeed.onloadedmetadata = resolve);
+                    cameraFeed.play();
+
+                    // 3. Воспроизведение Рекламного Видео
+                    // Использование '.play()' внутри обработчика клика обходит ограничения браузеров
+                    adVideo.volume = 0; // Немой
+                    await adVideo.play();
+                    
+                    // 4. Скрытие индикатора загрузки
+                    loadingIndicator.classList.add('hidden');
+                }
+            } catch (videoErr) {
+                 showError(`Ошибка при запуске видео или камеры: ${videoErr.message}`);
+            }
+        };
+
+        // Предварительная загрузка видео, чтобы избежать задержек
+        adVideo.onloadeddata = () => {
+             loadingIndicator.classList.add('hidden');
+             startOverlay.classList.remove('hidden'); // Показываем кнопку "Старт" после загрузки
+        };
+
+        adVideo.onerror = () => {
+             showError("Не удалось загрузить рекламное видео. Проверьте правильность URL и доступность файла.");
+        };
+
+        // Слушатель событий для кнопки "СТАРТ"
+        startButton.addEventListener('click', startAR);
+        
+        // Скрытие кнопки "Старт" и показ загрузки при инициализации
+        startOverlay.classList.add('hidden');
+        loadingIndicator.classList.remove('hidden');
+
+
+    </script>
+</body>
+</html>
